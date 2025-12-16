@@ -22,7 +22,7 @@ if (!process.env.FIREBASE_SERVICE_KEY) {
 }
 
 // ---------- Middleware ----------
-const ALLOWED_ORIGINS = [process.env.CLIENT_DOMAIN || 'http://localhost:5173']
+const ALLOWED_ORIGINS = [process.env.CLIENT_DOMAIN || 'http://localhost:5173', "https://helpful-entremet-42b72d.netlify.app/"]
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }))
 app.use(express.json())
 
@@ -31,6 +31,14 @@ const client = new MongoClient(process.env.MONGO_URI, { serverApi: { version: Se
 let db
 let Users, Books, Orders, Reviews, SellerRequests, Wishlists, Invoices, LatestBooks
 
+const fileUpload = require("express-fileupload");
+
+app.use(
+  fileUpload({
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+    createParentPath: true,
+  })
+);
 
 async function connectDB() {
   await client.connect()
@@ -44,7 +52,7 @@ async function connectDB() {
    Wishlists = db.collection('wishlist')
   Invoices = db.collection("invoices");
   LatestBooks = db.collection('Latest')
-
+  
   console.log('MongoDB connected')
 }
 connectDB();
@@ -55,46 +63,79 @@ const toObjectId = id => {
 }
 
 // Firebase token verification
+// const verifyJWT = async (req, res, next) => {
+//   const token = req?.headers?.authorization?.split(' ')[1];
+//   if (!token) return res.status(401).send({ message: 'Unauthorized Access!' });
+
+//   try {
+//     const decoded = await admin.auth().verifyIdToken(token);
+//     req.tokenEmail = decoded.email;
+
+//     // Fetch role from MongoDB
+//     // const user = await Users.findOne({ email: decoded.email });
+//     // req.tokenRole = user?.role; // <-- important!
+//     const user = await Users.findOne({ email: decoded.email });
+// req.tokenRole = user?.role;
+
+//     next();
+//   } catch (err) {
+//     console.log(err);
+//     return res.status(401).send({ message: 'Unauthorized Access!', err });
+//   }
+// };
 const verifyJWT = async (req, res, next) => {
-  const token = req?.headers?.authorization?.split(' ')[1];
-  if (!token) return res.status(401).send({ message: 'Unauthorized Access!' });
+  const token = req?.headers?.authorization?.split(" ")[1];
+  console.log("TOKEN RECEIVED:", token ? "YES" : "NO");
+
+  if (!token) return res.status(401).send({ message: "Unauthorized" });
 
   try {
     const decoded = await admin.auth().verifyIdToken(token);
-    req.tokenEmail = decoded.email;
+    console.log("DECODED EMAIL:", decoded.email);
 
-    // Fetch role from MongoDB
-    // const user = await Users.findOne({ email: decoded.email });
-    // req.tokenRole = user?.role; // <-- important!
     const user = await Users.findOne({ email: decoded.email });
-req.tokenRole = user?.role;
+    console.log("USER FROM DB:", user);
+
+    req.tokenEmail = decoded.email;
+    req.tokenRole = user?.role;
 
     next();
   } catch (err) {
-    console.log(err);
-    return res.status(401).send({ message: 'Unauthorized Access!', err });
+    console.log("JWT ERROR:", err.message);
+    return res.status(401).send({ message: "Unauthorized" });
   }
 };
 
+// const verifyRole = (role) => {
+//   return (req, res, next) => {
+//     if (!req.tokenRole) {
+//       return res.status(403).json({ message: "Forbidden" });
+//     }
 
-// role verification middleware
+//     if (req.tokenRole !== role && req.tokenRole !== "admin") {
+//       return res.status(403).json({ message: "Not authorized for this role" });
+//     }
+
+//     next();
+//   };
+// };
 const verifyRole = (role) => {
-  return async (req, res, next) => {
-    try {
-      const user = await Users.findOne({ email: req.tokenEmail });
-      if (!user) return res.status(404).json({ message: "User not found" });
-      if (user.role !== role && user.role !== "admin") {
-        // admin always has full access
-        return res.status(403).json({ message: "Not authorized for this role" });
-      }
-      req.userRole = user.role; // pass role downstream
-      next();
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ message: "Server error" });
+  return (req, res, next) => {
+    console.log("ROLE REQUIRED:", role);
+    console.log("ROLE FOUND:", req.tokenRole);
+
+    if (!req.tokenRole) {
+      return res.status(403).json({ message: "No role found" });
     }
+
+    if (req.tokenRole !== role && req.tokenRole !== "admin") {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    next();
   };
 };
+
 
 // Role middlewares
 const verifyADMIN = async (req, res, next) => {
@@ -145,26 +186,26 @@ const attachUserRole = async (req, res, next) => {
 };
 
 
-app.post("/books", verifyJWT, verifySELLER, async (req, res) => {
-  try {
-    const { title, author, price, status } = req.body;
+// app.post("/books", verifyJWT, verifySELLER, async (req, res) => {
+//   try {
+//     const { title, author, price, status } = req.body;
 
-    const newBook = {
-      title,
-      author,
-      price: Number(price),
-      status,
-      sellerEmail: req.tokenEmail,
-      createdAt: new Date(),
-    };
+//     const newBook = {
+//       title,
+//       author,
+//       price: Number(price),
+//       status,
+//       sellerEmail: req.tokenEmail,
+//       createdAt: new Date(),
+//     };
 
-    const result = await Books.insertOne(newBook);
-    res.json({ message: "Book added", book: newBook });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
+//     const result = await Books.insertOne(newBook);
+//     res.json({ message: "Book added", book: newBook });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ message: "Server error" });
+//   }
+// });
 
 /* ---------------- USERS(called after Firebase sign-in) ---------------- */
 app.patch('/user/role', verifyJWT, verifyADMIN, async (req, res) => {
@@ -1067,345 +1108,3 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)
 })
 
-
-// ======================
-// IMPORTS & CONFIG
-// ======================
-// const express = require("express");
-// const cors = require("cors");
-// const dotenv = require("dotenv");
-// const { MongoClient, ObjectId } = require("mongodb");
-// const admin = require("firebase-admin");
-// const Stripe = require("stripe");
-
-// dotenv.config();
-
-// const app = express();
-// app.use(cors());
-// app.use(express.json());
-
-// const PORT = process.env.PORT || 3000;
-
-// // ======================
-// // FIREBASE ADMIN
-// // ======================
-// if (!process.env.FIREBASE_SERVICE_KEY) {
-//   console.warn("⚠️ FIREBASE_SERVICE_KEY not set");
-// } else {
-//   const decoded = Buffer.from(process.env.FIREBASE_SERVICE_KEY, "base64").toString("utf8");
-//   admin.initializeApp({
-//     credential: admin.credential.cert(JSON.parse(decoded)),
-//   });
-//   console.log("✅ Firebase Admin initialized");
-// }
-
-// // ======================
-// // STRIPE
-// // ======================
-// const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-
-// // ======================
-// // DATABASE
-// // ======================
-// const client = new MongoClient(process.env.MONGO_URI);
-
-// let db, Users, Books, Orders, Reviews, Wishlists, SellerRequests, Invoices, LatestBooks;
-
-// async function connectDB() {
-//   try {
-//     await client.connect();
-//     db = client.db(process.env.DB_NAME || "BookRecordsDB");
-
-//     Users = db.collection("users");
-//     Books = db.collection("BookCollection");
-//     Orders = db.collection("OrderCollection");
-//     Reviews = db.collection("ReviewsCollection");
-//     SellerRequests = db.collection("sellerRequests");
-//     Wishlists = db.collection("wishlists");
-//     Invoices = db.collection("invoices");
-//     LatestBooks = db.collection("Latest");
-
-//     console.log("✅ MongoDB connected");
-//   } catch (err) {
-//     console.error("❌ MongoDB connection failed", err);
-//     process.exit(1);
-//   }
-// }
-
-// // ======================
-// // MIDDLEWARE
-// // ======================
-// const verifyJWT = async (req, res, next) => {
-//   try {
-//     const authHeader = req.headers.authorization;
-//     if (!authHeader) return res.status(401).json({ message: "Unauthorized" });
-
-//     const token = authHeader.split(" ")[1];
-//     const decoded = await admin.auth().verifyIdToken(token);
-//     req.tokenEmail = decoded.email;
-
-//     const user = await Users.findOne({ email: decoded.email });
-//     req.tokenRole = user?.role || "customer";
-
-//     next();
-//   } catch (err) {
-//     console.error("JWT verification failed:", err);
-//     res.status(401).json({ message: "Invalid token" });
-//   }
-// };
-
-// const verifyAdmin = (req, res, next) => {
-//   if (req.tokenRole !== "admin") return res.status(403).json({ message: "Forbidden" });
-//   next();
-// };
-
-// const verifyLibrarian = (req, res, next) => {
-//   if (!["librarian", "admin"].includes(req.tokenRole))
-//     return res.status(403).json({ message: "Forbidden" });
-//   next();
-// };
-
-// // ======================
-// // USERS
-// // ======================
-// app.post("/user", async (req, res) => {
-//   try {
-//     const { email, name, photo } = req.body;
-//     let user = await Users.findOne({ email });
-//     if (!user) {
-//       user = { email, name, photo, role: "customer", createdAt: new Date() };
-//       await Users.insertOne(user);
-//     }
-//     res.json(user);
-//   } catch (err) {
-//     console.error("Error creating/fetching user:", err);
-//     res.status(500).json({ message: "Failed to create/fetch user" });
-//   }
-// });
-
-// app.get("/user", verifyJWT, async (req, res) => {
-//   try {
-//     const user = await Users.findOne({ email: req.tokenEmail });
-//     if (!user) return res.status(404).json({ message: "User not found" });
-//     res.json(user);
-//   } catch (err) {
-//     console.error("Error fetching user:", err);
-//     res.status(500).json({ message: "Failed to fetch user" });
-//   }
-// });
-
-// app.get("/user/role", verifyJWT, async (req, res) => {
-//   try {
-//     res.json({ role: req.tokenRole });
-//   } catch (err) {
-//     console.error("Error fetching role:", err);
-//     res.status(500).json({ message: "Failed to fetch role" });
-//   }
-// });
-
-// // ======================
-// // BOOKS
-// // ======================
-// app.post("/books", verifyJWT, verifyLibrarian, async (req, res) => {
-//   try {
-//     const book = {
-//       ...req.body,
-//       status: "published",
-//       librarianEmail: req.tokenEmail,
-//       createdAt: new Date(),
-//     };
-//     await Books.insertOne(book);
-//     res.json({ message: "Book added successfully" });
-//   } catch (err) {
-//     console.error("Error adding book:", err);
-//     res.status(500).json({ message: "Failed to add book" });
-//   }
-// });
-
-// app.get("/books", async (req, res) => {
-//   try {
-//     const books = await Books.find({ status: "published" }).toArray();
-//     res.json(books);
-//   } catch (err) {
-//     console.error("Error fetching books:", err);
-//     res.status(500).json({ message: "Failed to fetch books" });
-//   }
-// });
-
-// app.get("/books/:id", async (req, res) => {
-//   try {
-//     const book = await Books.findOne({ _id: new ObjectId(req.params.id) });
-//     if (!book) return res.status(404).json({ message: "Book not found" });
-//     res.json(book);
-//   } catch (err) {
-//     console.error("Error fetching book:", err);
-//     res.status(500).json({ message: "Failed to fetch book" });
-//   }
-// });
-
-// // ======================
-// // WISHLIST
-// // ======================
-// app.post("/wishlist", verifyJWT, async (req, res) => {
-//   try {
-//     await Wishlists.insertOne({ email: req.tokenEmail, bookId: req.body.bookId });
-//     res.json({ message: "Added to wishlist" });
-//   } catch (err) {
-//     console.error("Error adding to wishlist:", err);
-//     res.status(500).json({ message: "Failed to add to wishlist" });
-//   }
-// });
-
-// app.get("/wishlist", verifyJWT, async (req, res) => {
-//   try {
-//     const wishlist = await Wishlists.find({ email: req.tokenEmail }).toArray();
-//     res.json(wishlist);
-//   } catch (err) {
-//     console.error("Error fetching wishlist:", err);
-//     res.status(500).json({ message: "Failed to fetch wishlist" });
-//   }
-// });
-// Example using Express.js
-app.get("/wishlist", async (req, res) => {
-  const email = req.query.email;
-  if (!email) return res.status(400).json({ message: "Email required" });
-
-  try {
-    const wishlist = await wishlist.find({ userEmail: email });
-    res.json(wishlist);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-
-// // ======================
-// // ORDERS
-// // ======================
-// app.post("/orders", verifyJWT, async (req, res) => {
-//   try {
-//     const order = {
-//       ...req.body,
-//       userEmail: req.tokenEmail,
-//       status: "pending",
-//       paymentStatus: "unpaid",
-//       createdAt: new Date(),
-//     };
-//     const result = await Orders.insertOne(order);
-//     res.json({ insertedId: result.insertedId });
-//   } catch (err) {
-//     console.error("Error creating order:", err);
-//     res.status(500).json({ message: "Failed to create order" });
-//   }
-// });
-
-// app.get("/orders", verifyJWT, async (req, res) => {
-//   try {
-//     const orders = await Orders.find({ userEmail: req.tokenEmail }).toArray();
-//     res.json(orders);
-//   } catch (err) {
-//     console.error("Error fetching orders:", err);
-//     res.status(500).json({ message: "Failed to fetch orders" });
-//   }
-// });
-
-// app.patch("/orders/:id/cancel", verifyJWT, async (req, res) => {
-//   try {
-//     await Orders.updateOne({ _id: new ObjectId(req.params.id) }, { $set: { status: "cancelled" } });
-//     res.json({ message: "Order cancelled" });
-//   } catch (err) {
-//     console.error("Error cancelling order:", err);
-//     res.status(500).json({ message: "Failed to cancel order" });
-//   }
-// });
-
-// // ======================
-// // STRIPE PAYMENT
-// // ======================
-// app.post("/create-checkout-session", verifyJWT, async (req, res) => {
-//   try {
-//     const { orderId, price } = req.body;
-
-//     const session = await stripe.checkout.sessions.create({
-//       payment_method_types: ["card"],
-//       mode: "payment",
-//       success_url: "http://localhost:5173/payment-success",
-//       cancel_url: "http://localhost:5173/payment-cancel",
-//       line_items: [
-//         {
-//           price_data: {
-//             currency: "cad",
-//             product_data: { name: "Book Order" },
-//             unit_amount: price * 100,
-//           },
-//           quantity: 1,
-//         },
-//       ],
-//     });
-
-//     await Orders.updateOne({ _id: new ObjectId(orderId) }, { $set: { paymentStatus: "paid", sessionId: session.id } });
-
-//     res.json({ url: session.url });
-//   } catch (err) {
-//     console.error("Error creating checkout session:", err);
-//     res.status(500).json({ message: "Failed to create checkout session" });
-//   }
-// });
-
-// // ======================
-// // REVIEWS
-// // ======================
-// app.post("/reviews", verifyJWT, async (req, res) => {
-//   try {
-//     const review = { ...req.body, email: req.tokenEmail, createdAt: new Date() };
-//     await Reviews.insertOne(review);
-//     res.json({ message: "Review added" });
-//   } catch (err) {
-//     console.error("Error adding review:", err);
-//     res.status(500).json({ message: "Failed to add review" });
-//   }
-// });
-
-// app.get("/reviews/:bookId", async (req, res) => {
-//   try {
-//     const reviews = await Reviews.find({ bookId: req.params.bookId }).toArray();
-//     res.json(reviews);
-//   } catch (err) {
-//     console.error("Error fetching reviews:", err);
-//     res.status(500).json({ message: "Failed to fetch reviews" });
-//   }
-// });
-
-// // ======================
-// // ADMIN
-// // ======================
-// app.get("/admin/users", verifyJWT, verifyAdmin, async (req, res) => {
-//   try {
-//     const users = await Users.find().toArray();
-//     res.json(users);
-//   } catch (err) {
-//     console.error("Error fetching users:", err);
-//     res.status(500).json({ message: "Failed to fetch users" });
-//   }
-// });
-
-// app.patch("/admin/users/:id/role", verifyJWT, verifyAdmin, async (req, res) => {
-//   try {
-//     await Users.updateOne({ _id: new ObjectId(req.params.id) }, { $set: { role: req.body.role } });
-//     res.json({ message: "Role updated" });
-//   } catch (err) {
-//     console.error("Error updating role:", err);
-//     res.status(500).json({ message: "Failed to update role" });
-//   }
-// });
-
-// // ======================
-// // SERVER START
-// // ======================
-// async function startServer() {
-//   await connectDB();
-//   app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
-// }
-
-// startServer();
